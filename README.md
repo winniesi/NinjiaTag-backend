@@ -1,5 +1,14 @@
 # NinjiaTag
 
+## Fork 版本
+
+使用 python flask 实现了 server.mjs 相同的功能。对外端口是 3001，运行方式：
+
+```
+pip install -r requirements.txt
+python app.py
+```
+
 ## DIY 你自己的 airtag
 
 ### DIY your own airtag(longterm record)
@@ -42,7 +51,7 @@ DIY 兼容 FindMy 网络的定位标签/设备（长期记录）
       - [创建 python3 venv 虚拟环境(可选)](#创建-python3-venv-虚拟环境可选)
         - [venv 虚拟环境 pip3 安装相关依赖](#venv-虚拟环境-pip3-安装相关依赖)
     - [安装 nodejs](#安装-nodejs)
-      - [修改 request\_reports.mjs](#修改-request_reportsmjs)
+      - [修改 request_reports.mjs](#修改-request_reportsmjs)
     - [安装 pm2 守护定时执行](#安装-pm2-守护定时执行)
       - [PM2 安装说明](#pm2-安装说明)
       - [PM2 长期运行脚本命令](#pm2-长期运行脚本命令)
@@ -382,4 +391,3 @@ this script reads input.txt generated with request_reports.py and writes for eac
 此存储库仅用于研究目的，此代码的使用由您负责。
 
 对于您选择如何使用此处提供的任何源代码，我概不负责。使用此存储库中提供的任何文件，即表示您同意自行承担使用风险。再次重申，此处提供的所有文件仅用于教育和或研究目的。本项目仅用于物品的防丢，严禁用于非法用途，使用时请遵守当地的法律法规。
-
