@@ -68,6 +68,144 @@ def get_db_connection():
     return conn
 
 
+def init_database():
+    """Initialize database with required tables"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Create keyMap table if not exists
+    cursor.execute('''CREATE TABLE IF NOT EXISTS keyMap (
+                        name TEXT,
+                        private_key TEXT,
+                        advertisement_key TEXT,
+                        hashed_adv_key TEXT,
+                        PRIMARY KEY (name, hashed_adv_key)
+                    )''')
+    
+    # Create reports_detail table if not exists
+    cursor.execute('''CREATE TABLE IF NOT EXISTS reports_detail (
+                        id_short TEXT, 
+                        timestamp INTEGER,
+                        isodatetime TEXT,
+                        datePublished INTEGER,
+                        latitude REAL,
+                        longitude REAL,
+                        payload TEXT, 
+                        id TEXT, 
+                        status INTEGER,
+                        statusCode INTEGER, 
+                        PRIMARY KEY(id, timestamp)
+                     )''')
+    
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/reports", methods=["POST"])
+@limiter.limit("200 per 5 minutes")
+def receive_report():
+    """接收报告数据并写入数据库"""
+    try:
+        if not request.json:
+            return jsonify({"error": "Invalid request format, expected JSON"}), 400
+        
+        # 验证必需字段
+        required_fields = ['id_short', 'timestamp', 'isodatetime', 'datePublished', 
+                          'latitude', 'longitude', 'payload', 'id', 'status', 'statusCode']
+        
+        for field in required_fields:
+            if field not in request.json:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 插入数据到数据库
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO reports_detail 
+                (id_short, timestamp, isodatetime, datePublished, latitude, longitude, payload, id, status, statusCode) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                request.json['id_short'],
+                request.json['timestamp'],
+                request.json['isodatetime'],
+                request.json['datePublished'],
+                request.json['latitude'],
+                request.json['longitude'],
+                request.json['payload'],
+                request.json['id'],
+                request.json['status'],
+                request.json['statusCode']
+            ))
+            
+            conn.commit()
+            print(f"成功插入报告: {request.json['id_short']} at {request.json['isodatetime']}")
+            
+            return jsonify({"success": True, "message": "Report received and stored"}), 200
+            
+        except sqlite3.Error as e:
+            conn.rollback()
+            print(f"数据库错误: {e}")
+            return jsonify({"error": f"Database error: {str(e)}"}), 500
+        
+        finally:
+            conn.close()
+            
+    except Exception as err:
+        print(f"处理报告时发生错误: {err}")
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route("/api/keymap", methods=["POST"])
+@limiter.limit("50 per 5 minutes")
+def update_keymap():
+    """更新keymap表"""
+    try:
+        if not request.json:
+            return jsonify({"error": "Invalid request format, expected JSON"}), 400
+        
+        # 验证必需字段
+        required_fields = ['name', 'private_key', 'advertisement_key', 'hashed_adv_key']
+        
+        for field in required_fields:
+            if field not in request.json:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 插入或更新keymap数据
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO keyMap 
+                (name, private_key, advertisement_key, hashed_adv_key) 
+                VALUES (?, ?, ?, ?)
+            ''', (
+                request.json['name'],
+                request.json['private_key'],
+                request.json['advertisement_key'],
+                request.json['hashed_adv_key']
+            ))
+            
+            conn.commit()
+            print(f"成功更新keymap: {request.json['name']}")
+            
+            return jsonify({"success": True, "message": "KeyMap updated"}), 200
+            
+        except sqlite3.Error as e:
+            conn.rollback()
+            print(f"数据库错误: {e}")
+            return jsonify({"error": f"Database error: {str(e)}"}), 500
+        
+        finally:
+            conn.close()
+            
+    except Exception as err:
+        print(f"更新keymap时发生错误: {err}")
+        return jsonify({"error": str(err)}), 500
+
+
 @app.route("/query", methods=["POST"])
 @limiter.limit("100 per 5 minutes")
 def query_reports():
@@ -181,6 +319,10 @@ def query_reports():
 
 
 if __name__ == "__main__":
+    # Initialize database
+    init_database()
+    print("Database initialized successfully")
+    
     # Initialize database connection and verify table structure
     conn = get_db_connection()
     cursor = conn.cursor()

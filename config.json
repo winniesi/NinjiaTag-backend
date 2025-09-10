@@ -1,0 +1,6 @@
+{
+  "server_url": "http://localhost:3001",
+  "api_endpoint": "/api/reports",
+  "timeout": 30,
+  "retry_attempts": 3
+}

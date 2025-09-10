@@ -13,6 +13,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.backends import default_backend
 import sqlite3
+import requests
+import time
 from pypush_gsa_icloud import icloud_login_mobileme, generate_anisette_headers
 
 
@@ -33,6 +35,50 @@ def decode_tag(data):
     confidence = int.from_bytes(data[8:9], 'big')
     status = int.from_bytes(data[9:10], 'big')
     return {'lat': latitude, 'lon': longitude, 'conf': confidence, 'status': status}
+
+
+def load_config():
+    """加载配置文件"""
+    config_path = os.path.dirname(os.path.realpath(__file__)) + "/config.json"
+    try:
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"配置文件 {config_path} 不存在，使用默认配置")
+        return {
+            "server_url": "http://localhost:3001",
+            "api_endpoint": "/api/reports",
+            "timeout": 30,
+            "retry_attempts": 3
+        }
+
+
+def send_report_to_server(report_data, config):
+    """发送报告数据到远程服务器"""
+    url = config["server_url"] + config["api_endpoint"]
+    
+    for attempt in range(config["retry_attempts"]):
+        try:
+            response = requests.post(
+                url,
+                json=report_data,
+                timeout=config["timeout"],
+                headers={"Content-Type": "application/json"}
+            )
+            if response.status_code == 200:
+                print(f"成功发送报告到服务器: {report_data.get('id_short', 'unknown')}")
+                return True
+            else:
+                print(f"服务器返回错误状态码: {response.status_code}")
+                print(f"响应内容: {response.text}")
+        except requests.exceptions.RequestException as e:
+            print(f"发送请求失败 (尝试 {attempt + 1}/{config['retry_attempts']}): {e}")
+        
+        if attempt < config["retry_attempts"] - 1:
+            time.sleep(2 ** attempt)  # 指数退避
+    
+    print(f"无法发送报告到服务器: {report_data.get('id_short', 'unknown')}")
+    return False
 
 
 def getAuth(regenerate=False, second_factor='sms'):
@@ -83,34 +129,9 @@ async def fetch_report(session, semaphore, id, auth, headers, startdate, unixEpo
 
 async def main_async(args, privkeys, names):
     """异步主函数"""
-    # 初始化数据库 - 确保文件存在和表结构正确
-    db_path = os.path.dirname(os.path.realpath(__file__)) + '/reports.db'
-
-    # 创建数据库文件（如果不存在）
-    sq3db = sqlite3.connect(db_path)
-    sq3 = sq3db.cursor()
-
-    # 创建报告明细表（如果不存在）
-    sq3.execute('''CREATE TABLE IF NOT EXISTS reports_detail (
-                    id_short TEXT, 
-                    timestamp INTEGER,
-                    isodatetime TEXT,
-                    datePublished INTEGER,
-                    latitude REAL,
-                    longitude REAL,
-                    payload TEXT, 
-                    id TEXT, 
-                    status INTEGER,
-                    statusCode INTEGER, 
-                    PRIMARY KEY(id, timestamp)
-                 )''')
-    sq3db.commit()
-    sq3.close()
-    sq3db.close()
-
-    # 重新打开连接用于后续操作
-    sq3db = sqlite3.connect(db_path)
-    sq3 = sq3db.cursor()
+    # 加载配置
+    config = load_config()
+    print(f"使用服务器配置: {config['server_url']}{config['api_endpoint']}")
 
     # 获取认证信息
     dsid, searchPartyToken = getAuth(
@@ -182,27 +203,21 @@ async def main_async(args, privkeys, names):
             found.add(tag['key'])
             ordered.append(tag)
 
-            # 安全地插入数据（使用参数化查询）
-            try:
-                sq3.execute('''
-                    INSERT OR REPLACE INTO reports_detail 
-                    (id_short, timestamp, isodatetime, datePublished, latitude, longitude, payload, id, status, statusCode) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    names[report['id']],
-                    timestamp,
-                    tag['isodatetime'],
-                    report['datePublished'],
-                    tag['lat'],
-                    tag['lon'],
-                    report['payload'],
-                    report['id'],
-                    tag['status'],
-                    report['statusCode']
-                ))
-            except sqlite3.Error as e:
-                print(f"数据库错误: {e}")
-                print(f"无法插入报告: {report}")
+            # 发送数据到远程服务器
+            report_data = {
+                'id_short': names[report['id']],
+                'timestamp': timestamp,
+                'isodatetime': tag['isodatetime'],
+                'datePublished': report['datePublished'],
+                'latitude': tag['lat'],
+                'longitude': tag['lon'],
+                'payload': report['payload'],
+                'id': report['id'],
+                'status': tag['status'],
+                'statusCode': report['statusCode']
+            }
+            
+            send_report_to_server(report_data, config)
 
     # 输出结果
     print(f'{len(ordered)} reports processed.')
@@ -211,11 +226,6 @@ async def main_async(args, privkeys, names):
         print(rep)
     print(f'Found:   {list(found)}')
     print(f'Missing: {[key for key in names.values() if key not in found]}')
-
-    # 关闭数据库
-    sq3.close()
-    sq3db.commit()
-    sq3db.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -229,22 +239,7 @@ if __name__ == "__main__":
                         help='use trusted device for 2FA instead of SMS', action='store_true')
     args = parser.parse_args()
 
-    # Connect to the database
-    db_path = os.path.dirname(os.path.realpath(__file__)) + '/reports.db'
-    sq3db = sqlite3.connect(db_path)
-    sq3 = sq3db.cursor()
-
-    # Create keyMap table if not exists
-    sq3.execute('''CREATE TABLE IF NOT EXISTS keyMap (
-                    name TEXT,
-                    private_key TEXT,
-                    advertisement_key TEXT,
-                    hashed_adv_key TEXT,
-                    PRIMARY KEY (name, hashed_adv_key)
-                )''')
-    sq3db.commit()
-
-    # Read key files and store keys in dictionaries/database
+    # Read key files and store keys in dictionaries
     privkeys = {}
     names = {}
     # 递归 glob.glob 调用取出目录下所有keys
@@ -269,10 +264,6 @@ if __name__ == "__main__":
 
                 # When we have a complete key set, store it
                 if current_priv and current_adv and current_hashed_adv:
-                    # Insert or replace in database
-                    sq3.execute("INSERT OR REPLACE INTO keyMap VALUES (?, ?, ?, ?)",
-                                (name, current_priv, current_adv, current_hashed_adv))
-
                     # Add to dictionaries
                     privkeys[current_hashed_adv] = current_priv
                     names[current_hashed_adv] = name
@@ -285,10 +276,6 @@ if __name__ == "__main__":
             # If we didn't find any key pairs in this file
             if isempty is True:
                 print(f"Couldn't find valid key pair in {keyfile}")
-
-    sq3db.commit()
-    sq3.close()
-    sq3db.close()
 
     # 运行异步主函数
     asyncio.run(main_async(args, privkeys, names))
